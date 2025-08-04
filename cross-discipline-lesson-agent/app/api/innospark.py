@@ -65,7 +65,7 @@ class InnosparkClient:
                 self.base_url,
                 headers=self.headers,
                 data=json.dumps(data),
-                timeout=30
+                timeout=60
             )
 
             if response.status_code == 200:
