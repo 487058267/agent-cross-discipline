@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from app.api.innospark import InnosparkClient
 from app.api.media import MediaRecommender
 from app.models import LessonRequest, LessonModification, MediaRequest
@@ -21,29 +21,36 @@ app.add_middleware(
 innospark = InnosparkClient()
 media_recommender = MediaRecommender()
 
-# 存储用户会话状态
-user_sessions = {}
 
-
+# 会话数据模型
 class SessionData(BaseModel):
     current_lesson_plan: Optional[str] = None
-    history: list = []
+    history: List[Dict[str, Any]] = []
+
+
+# 存储用户会话状态 - 使用普通字典
+user_sessions: Dict[str, Dict[str, Any]] = {}
 
 
 @app.post("/generate-lesson")
 async def generate_lesson(lesson_request: LessonRequest):
+    """生成初始教案"""
     try:
         lesson_plan = innospark.generate_lesson_plan(lesson_request.dict())
 
-        # 修复：将列表转换为元组后再哈希
-        request_data = lesson_request.dict()
-        request_data["related_subjects"] = tuple(request_data["related_subjects"])
-        request_data["knowledge_goals"] = tuple(request_data["knowledge_goals"])
+        # 生成会话ID
+        session_id = str(hash(frozenset(lesson_request.dict().items())))
 
-        session_id = str(hash(frozenset(request_data.items())))
+        # 存储到会话 - 修复：使用字典而不是 Pydantic 模型实例
+        user_sessions[session_id] = {
+            "current_lesson_plan": lesson_plan,
+            "history": [{"action": "initial_generation", "content": lesson_plan}]
+        }
 
-        user_sessions[session_id] = SessionData(...)
-        return {"session_id": session_id, "lesson_plan": lesson_plan}
+        return {
+            "session_id": session_id,
+            "lesson_plan": lesson_plan
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -55,15 +62,15 @@ async def modify_lesson(session_id: str, modification: LessonModification):
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        current_plan = user_sessions[session_id].current_lesson_plan
+        current_plan = user_sessions[session_id]["current_lesson_plan"]
         modified_plan = innospark.modify_lesson_plan(
             current_plan,
             modification.dict()
         )
 
         # 更新会话
-        user_sessions[session_id].current_lesson_plan = modified_plan
-        user_sessions[session_id].history.append({
+        user_sessions[session_id]["current_lesson_plan"] = modified_plan
+        user_sessions[session_id]["history"].append({
             "action": "modification",
             "instructions": modification.modification_instructions,
             "modified_section": modification.section_to_modify,
@@ -89,3 +96,18 @@ async def recommend_media(session_id: str, media_request: MediaRequest):
         return {"results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/health")
+async def health_check():
+    """健康检查端点"""
+    return {"status": "healthy"}
+
+
+@app.get("/session/{session_id}")
+async def get_session(session_id: str):
+    """获取会话信息"""
+    if session_id not in user_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return user_sessions[session_id]

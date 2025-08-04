@@ -14,7 +14,6 @@ class InnosparkClient:
         }
 
     def generate_lesson_plan(self, lesson_request: Dict[str, Any]) -> str:
-        print("Received lesson_request:", lesson_request)
         """生成跨学科教案"""
         prompt = self._build_lesson_prompt(lesson_request)
 
@@ -24,16 +23,27 @@ class InnosparkClient:
             "stream": False
         }
 
-        response = requests.post(
-            self.base_url,
-            headers=self.headers,
-            data=json.dumps(data)
-        )
+        try:
+            response = requests.post(
+                self.base_url,
+                headers=self.headers,
+                data=json.dumps(data),
+                timeout=30  # 添加超时设置
+            )
 
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            raise Exception(f"Innospark API error: {response.text}")
+            if response.status_code == 200:
+                result = response.json()
+                if "choices" in result and len(result["choices"]) > 0:
+                    return result["choices"][0]["message"]["content"]
+                else:
+                    raise Exception("Invalid response format from Innospark API")
+            else:
+                print(f"API Error - Status: {response.status_code}, Response: {response.text}")
+                raise Exception(f"Innospark API error: {response.status_code} - {response.text}")
+
+        except requests.RequestException as e:
+            print(f"Request Error: {e}")
+            raise Exception(f"Failed to connect to Innospark API: {str(e)}")
 
     def modify_lesson_plan(self, current_plan: str, modification: Dict[str, Any]) -> str:
         """修改现有教案"""
@@ -50,16 +60,27 @@ class InnosparkClient:
             "stream": False
         }
 
-        response = requests.post(
-            self.base_url,
-            headers=self.headers,
-            data=json.dumps(data)
-        )
+        try:
+            response = requests.post(
+                self.base_url,
+                headers=self.headers,
+                data=json.dumps(data),
+                timeout=30
+            )
 
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            raise Exception(f"Innospark API error: {response.text}")
+            if response.status_code == 200:
+                result = response.json()
+                if "choices" in result and len(result["choices"]) > 0:
+                    return result["choices"][0]["message"]["content"]
+                else:
+                    raise Exception("Invalid response format from Innospark API")
+            else:
+                print(f"API Error - Status: {response.status_code}, Response: {response.text}")
+                raise Exception(f"Innospark API error: {response.status_code} - {response.text}")
+
+        except requests.RequestException as e:
+            print(f"Request Error: {e}")
+            raise Exception(f"Failed to connect to Innospark API: {str(e)}")
 
     def _build_lesson_prompt(self, lesson_request: Dict[str, Any]) -> str:
         """构建教案生成提示词"""
