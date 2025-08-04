@@ -5,6 +5,8 @@ from typing import Dict, Any, Optional, List
 from app.api.innospark import InnosparkClient
 from app.api.media import MediaRecommender
 from app.models import LessonRequest, LessonModification, MediaRequest
+import json
+import hashlib
 
 app = FastAPI(title="跨学科教案智能体")
 
@@ -39,7 +41,8 @@ async def generate_lesson(lesson_request: LessonRequest):
         lesson_plan = innospark.generate_lesson_plan(lesson_request.dict())
 
         # 生成会话ID
-        session_id = str(hash(frozenset(lesson_request.dict().items())))
+        data_str = json.dumps(lesson_request.dict(), sort_keys=True, ensure_ascii=False)
+        session_id = hashlib.md5(data_str.encode('utf-8')).hexdigest()[:12]
 
         # 存储到会话 - 修复：使用字典而不是 Pydantic 模型实例
         user_sessions[session_id] = {

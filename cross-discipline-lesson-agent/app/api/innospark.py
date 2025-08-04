@@ -28,7 +28,7 @@ class InnosparkClient:
                 self.base_url,
                 headers=self.headers,
                 data=json.dumps(data),
-                timeout=30  # 添加超时设置
+                timeout=60  # 添加超时设置
             )
 
             if response.status_code == 200:
