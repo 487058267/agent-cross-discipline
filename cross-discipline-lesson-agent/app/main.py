@@ -32,21 +32,18 @@ def parse_lesson_sections(lesson_plan: str) -> Dict[str, str]:
     """解析教案，提取各个部分的内容"""
     sections = {}
 
-    # 定义常见的教案部分
+    # 改进的章节模式，支持多种格式
     section_patterns = [
-        r'1\.\s*教学目标',
-        r'2\.\s*跨学科关联',
-        r'3\.\s*教学步骤',
-        r'4\.\s*评估方法',
-        r'5\.\s*延伸活动',
-        r'教学目标',
-        r'跨学科关联',
-        r'教学步骤',
-        r'评估方法',
-        r'延伸活动'
+        # Markdown格式: #### **1. 教学目标** 或 ### 1. 教学目标
+        r'#{1,6}\s*\*?\*?\s*(\d+\.\s*[^*\n]+|\d+\s*[^*\n]+|[^*\n]+)\*?\*?',
+        # 纯数字格式: 1. 教学目标
+        r'^\d+\.\s*(.+)$',
+        # 直接章节名: 教学目标
+        r'^(教学目标|跨学科关联|教学步骤|评估方法|延伸活动)$',
+        # 带星号的: **教学目标**
+        r'^\*\*([^*]+)\*\*$'
     ]
 
-    # 分割教案内容
     lines = lesson_plan.split('\n')
     current_section = None
     current_content = []
@@ -56,18 +53,40 @@ def parse_lesson_sections(lesson_plan: str) -> Dict[str, str]:
         if not line:
             continue
 
+        # 跳过明显的非章节内容（如思考过程）
+        if any(keyword in line for keyword in ['用户要求', '让我', '需要', '考虑', '可能', '应该']):
+            continue
+
         # 检查是否是新的章节标题
         is_section_header = False
         for pattern in section_patterns:
-            if re.search(pattern, line):
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
                 # 保存之前的章节
                 if current_section and current_content:
                     sections[current_section] = '\n'.join(current_content)
 
-                # 开始新章节
-                current_section = re.sub(r'^\d+\.\s*', '', line)  # 移除编号
-                current_content = []
-                is_section_header = True
+                # 提取和清理章节名称
+                section_name = match.group(1) if match.groups() else line
+                # 清理章节名称中的标记符号和数字
+                section_name = re.sub(r'[#*\d\.\s]*', '', section_name).strip()
+
+                # 标准化章节名称
+                if '教学目标' in section_name:
+                    section_name = '教学目标'
+                elif '跨学科' in section_name:
+                    section_name = '跨学科关联'
+                elif '教学步骤' in section_name:
+                    section_name = '教学步骤'
+                elif '评估' in section_name:
+                    section_name = '评估方法'
+                elif '延伸' in section_name:
+                    section_name = '延伸活动'
+
+                if section_name:  # 确保章节名不为空
+                    current_section = section_name
+                    current_content = []
+                    is_section_header = True
                 break
 
         if not is_section_header and current_section:
@@ -77,8 +96,10 @@ def parse_lesson_sections(lesson_plan: str) -> Dict[str, str]:
     if current_section and current_content:
         sections[current_section] = '\n'.join(current_content)
 
-    return sections
+    # 调试输出
+    print("Parsed sections:", list(sections.keys()))
 
+    return sections
 
 @app.post("/generate-lesson")
 async def generate_lesson(lesson_request: LessonRequest):

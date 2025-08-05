@@ -1,5 +1,6 @@
 import json
 import requests
+import re
 from typing import Dict, Any
 from config.settings import INNOSPARK_API_KEY, INNOSPARK_API_URL
 
@@ -12,6 +13,22 @@ class InnosparkClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
+
+    def _clean_ai_response(self, content: str) -> str:
+        """清理AI响应，移除思考标签和多余内容"""
+        # 移除 <think> 标签及其内容
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+
+        # 移除其他可能的XML标签
+        content = re.sub(r'<[^>]+>', '', content)
+
+        # 清理多余的空行
+        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
+
+        # 去除开头和结尾的空白
+        content = content.strip()
+
+        return content
 
     def generate_lesson_plan(self, lesson_request: Dict[str, Any]) -> str:
         """生成跨学科教案"""
@@ -34,7 +51,10 @@ class InnosparkClient:
             if response.status_code == 200:
                 result = response.json()
                 if "choices" in result and len(result["choices"]) > 0:
-                    return result["choices"][0]["message"]["content"]
+                    raw_content = result["choices"][0]["message"]["content"]
+                    # 清理AI响应
+                    cleaned_content = self._clean_ai_response(raw_content)
+                    return cleaned_content
                 else:
                     raise Exception("Invalid response format from Innospark API")
             else:
@@ -51,7 +71,7 @@ class InnosparkClient:
             f"以下是当前的教案:\n{current_plan}\n\n"
             f"根据以下要求修改教案:\n{modification['modification_instructions']}\n\n"
             f"只修改'{modification['section_to_modify']}'部分，其他部分保持不变。"
-            "直接返回修改后的完整教案。"
+            "直接返回修改后的完整教案，不要包含任何思考过程或解释。"
         )
 
         data = {
@@ -71,7 +91,10 @@ class InnosparkClient:
             if response.status_code == 200:
                 result = response.json()
                 if "choices" in result and len(result["choices"]) > 0:
-                    return result["choices"][0]["message"]["content"]
+                    raw_content = result["choices"][0]["message"]["content"]
+                    # 清理AI响应
+                    cleaned_content = self._clean_ai_response(raw_content)
+                    return cleaned_content
                 else:
                     raise Exception("Invalid response format from Innospark API")
             else:
@@ -93,5 +116,5 @@ class InnosparkClient:
             f"- 学术特点: {lesson_request['academic_features']}\n\n"
             "请按照以下结构生成教案:\n"
             "1. 教学目标\n2. 跨学科关联\n3. 教学步骤\n4. 评估方法\n5. 延伸活动\n"
-            "确保内容具有创新性和实践性。"
+            "确保内容具有创新性和实践性。请直接返回教案内容，不要包含任何思考过程或标签。"
         )
