@@ -8,6 +8,8 @@ from app.models import LessonRequest, LessonModification, MediaRequest, SectionM
 import json
 import hashlib
 import re
+import os
+from datetime import datetime
 
 app = FastAPI(title="跨学科教案智能体")
 
@@ -26,6 +28,52 @@ media_recommender = MediaRecommender()
 
 # 存储用户会话状态
 user_sessions: Dict[str, Dict[str, Any]] = {}
+
+# 创建保存目录
+MARKDOWN_SAVE_DIR = "saved_lessons"
+os.makedirs(MARKDOWN_SAVE_DIR, exist_ok=True)
+
+
+def save_as_markdown(session_id: str, content: str, content_type: str = "lesson_plan", additional_info: Dict = None):
+    """将内容保存为markdown文件"""
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{session_id}_{content_type}_{timestamp}.md"
+        filepath = os.path.join(MARKDOWN_SAVE_DIR, filename)
+
+        # 构建markdown内容
+        markdown_content = f"""# {content_type.replace('_', ' ').title()}
+
+**会话ID:** {session_id}  
+**生成时间:** {datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")}  
+**内容类型:** {content_type}
+
+---
+
+{content}
+
+---
+
+"""
+
+        # 如果有额外信息，添加到文件末尾
+        if additional_info:
+            markdown_content += "\n## 附加信息\n\n"
+            for key, value in additional_info.items():
+                markdown_content += f"**{key}:** {value}  \n"
+
+        markdown_content += f"\n*文件生成时间: {datetime.now().isoformat()}*\n"
+
+        # 保存文件
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+
+        print(f"Markdown文件已保存: {filepath}")
+        return filepath
+
+    except Exception as e:
+        print(f"保存markdown文件时出错: {e}")
+        return None
 
 
 def parse_lesson_sections(lesson_plan: str) -> Dict[str, str]:
@@ -101,6 +149,7 @@ def parse_lesson_sections(lesson_plan: str) -> Dict[str, str]:
 
     return sections
 
+
 @app.post("/generate-lesson")
 async def generate_lesson(lesson_request: LessonRequest):
     """生成初始教案"""
@@ -114,17 +163,29 @@ async def generate_lesson(lesson_request: LessonRequest):
         # 解析教案章节
         sections = parse_lesson_sections(lesson_plan)
 
+        # 保存为markdown文件
+        additional_info = {
+            "年级": lesson_request.grade,
+            "主学科": lesson_request.main_subject,
+            "关联学科": ", ".join(lesson_request.related_subjects),
+            "预估课时": f"{lesson_request.estimated_hours}小时",
+            "知识目标": ", ".join(lesson_request.knowledge_goals)
+        }
+        markdown_file = save_as_markdown(session_id, lesson_plan, "initial_lesson_plan", additional_info)
+
         # 存储到会话
         user_sessions[session_id] = {
             "current_lesson_plan": lesson_plan,
             "sections": sections,
-            "history": [{"action": "initial_generation", "content": lesson_plan}]
+            "history": [{"action": "initial_generation", "content": lesson_plan, "markdown_file": markdown_file}],
+            "request_info": lesson_request.dict()
         }
 
         return {
             "session_id": session_id,
             "lesson_plan": lesson_plan,
-            "available_sections": list(sections.keys())
+            "available_sections": list(sections.keys()),
+            "markdown_file": markdown_file
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -146,6 +207,14 @@ async def modify_lesson(session_id: str, modification: LessonModification):
         # 重新解析章节
         sections = parse_lesson_sections(modified_plan)
 
+        # 保存修改后的版本为markdown
+        additional_info = {
+            "修改指令": modification.modification_instructions,
+            "修改章节": modification.section_to_modify,
+            "原始请求信息": str(user_sessions[session_id].get("request_info", {}))
+        }
+        markdown_file = save_as_markdown(session_id, modified_plan, "modified_lesson_plan", additional_info)
+
         # 更新会话
         user_sessions[session_id]["current_lesson_plan"] = modified_plan
         user_sessions[session_id]["sections"] = sections
@@ -153,12 +222,14 @@ async def modify_lesson(session_id: str, modification: LessonModification):
             "action": "modification",
             "instructions": modification.modification_instructions,
             "modified_section": modification.section_to_modify,
-            "result": modified_plan
+            "result": modified_plan,
+            "markdown_file": markdown_file
         })
 
         return {
             "lesson_plan": modified_plan,
-            "available_sections": list(sections.keys())
+            "available_sections": list(sections.keys()),
+            "markdown_file": markdown_file
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -200,12 +271,38 @@ async def recommend_media_for_section(session_id: str, request: AutoMediaRequest
         # 提取用于搜索的关键词供参考
         keywords = media_recommender.extract_keywords_from_section(section_content, request.section_name)
 
+        # 保存媒体推荐结果为markdown
+        media_content = f"## {request.section_name} - {request.media_type.title()}推荐\n\n"
+        media_content += f"**搜索关键词:** {keywords}\n\n"
+
+        for i, item in enumerate(results, 1):
+            media_content += f"### 推荐 {i}\n\n"
+            if request.media_type == "image":
+                media_content += f"- **图片链接:** {item['url']}\n"
+                media_content += f"- **摄影师:** {item.get('photographer', 'Unknown')}\n"
+                media_content += f"- **描述:** {item.get('description', 'No description')}\n"
+                media_content += f"- **原始链接:** {item.get('link', 'N/A')}\n\n"
+            else:  # video
+                media_content += f"- **标题:** {item.get('title', 'Unknown')}\n"
+                media_content += f"- **视频链接:** {item['url']}\n"
+                media_content += f"- **描述:** {item.get('description', 'No description')}\n\n"
+
+        additional_info = {
+            "章节名称": request.section_name,
+            "媒体类型": request.media_type,
+            "推荐数量": len(results),
+            "搜索关键词": keywords
+        }
+        markdown_file = save_as_markdown(session_id, media_content, f"media_recommendation_{request.media_type}",
+                                         additional_info)
+
         return {
             "section_name": request.section_name,
             "keywords_used": keywords,
             "media_type": request.media_type,
             "results": results,
-            "total_found": len(results)
+            "total_found": len(results),
+            "markdown_file": markdown_file
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -244,6 +341,35 @@ async def recommend_media(session_id: str, media_request: MediaRequest):
             raise HTTPException(status_code=400, detail="Invalid media type")
 
         return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/saved-files/{session_id}")
+async def get_saved_files(session_id: str):
+    """获取指定会话的所有保存文件列表"""
+    try:
+        files = []
+        for filename in os.listdir(MARKDOWN_SAVE_DIR):
+            if filename.startswith(session_id) and filename.endswith('.md'):
+                filepath = os.path.join(MARKDOWN_SAVE_DIR, filename)
+                stat = os.stat(filepath)
+                files.append({
+                    "filename": filename,
+                    "filepath": filepath,
+                    "size": stat.st_size,
+                    "created_time": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+
+        # 按创建时间排序
+        files.sort(key=lambda x: x['created_time'], reverse=True)
+
+        return {
+            "session_id": session_id,
+            "total_files": len(files),
+            "files": files
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
