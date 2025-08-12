@@ -76,78 +76,106 @@ def save_as_markdown(session_id: str, content: str, content_type: str = "lesson_
         return None
 
 
+
 def parse_lesson_sections(lesson_plan: str) -> Dict[str, str]:
-    """解析教案，提取各个部分的内容"""
+    """
+    精确解析教案，仅将 "### [数字]. [标题]" 格式的行识别为顶级章节。
+    """
     sections = {}
-
-    # 改进的章节模式，支持多种格式
-    section_patterns = [
-        # Markdown格式: #### **1. 教学目标** 或 ### 1. 教学目标
-        r'#{1,6}\s*\*?\*?\s*(\d+\.\s*[^*\n]+|\d+\s*[^*\n]+|[^*\n]+)\*?\*?',
-        # 纯数字格式: 1. 教学目标
-        r'^\d+\.\s*(.+)$',
-        # 直接章节名: 教学目标
-        r'^(教学目标|跨学科关联|教学步骤|评估方法|延伸活动)$',
-        # 带星号的: **教学目标**
-        r'^\*\*([^*]+)\*\*$'
-    ]
-
-    lines = lesson_plan.split('\n')
-    current_section = None
+    current_section_title = None
     current_content = []
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
+    # 这个正则表达式非常严格：
+    # ^###       -> 必须以 ### 开头
+    # \s*        -> 任意数量的空格
+    # \d+\.      -> 一个或多个数字，后面跟一个点
+    # \s+        -> 至少一个空格
+    # (.*)       -> 捕获标题的剩余部分
+    main_heading_pattern = re.compile(r'^###\s*\d+\.\s+(.*)')
 
-        # 跳过明显的非章节内容（如思考过程）
-        if any(keyword in line for keyword in ['用户要求', '让我', '需要', '考虑', '可能', '应该']):
-            continue
+    for line in lesson_plan.split('\n'):
+        match = main_heading_pattern.match(line)
 
-        # 检查是否是新的章节标题
-        is_section_header = False
-        for pattern in section_patterns:
-            match = re.search(pattern, line, re.IGNORECASE)
-            if match:
-                # 保存之前的章节
-                if current_section and current_content:
-                    sections[current_section] = '\n'.join(current_content)
+        if match:
+            # 找到一个新的主章节标题
+            # 1. 保存上一个章节的内容
+            if current_section_title:
+                sections[current_section_title] = '\n'.join(current_content).strip()
 
-                # 提取和清理章节名称
-                section_name = match.group(1) if match.groups() else line
-                # 清理章节名称中的标记符号和数字
-                section_name = re.sub(r'[#*\d\.\s]*', '', section_name).strip()
+            # 2. 设置新的、干净的章节标题
+            current_section_title = match.group(1).strip()
+            current_content = []
 
-                # 标准化章节名称
-                if '教学目标' in section_name:
-                    section_name = '教学目标'
-                elif '跨学科' in section_name:
-                    section_name = '跨学科关联'
-                elif '教学步骤' in section_name:
-                    section_name = '教学步骤'
-                elif '评估' in section_name:
-                    section_name = '评估方法'
-                elif '延伸' in section_name:
-                    section_name = '延伸活动'
-
-                if section_name:  # 确保章节名不为空
-                    current_section = section_name
-                    current_content = []
-                    is_section_header = True
-                break
-
-        if not is_section_header and current_section:
+        elif current_section_title:
+            # 如果是普通行，则追加到当前章节内容
             current_content.append(line)
 
     # 保存最后一个章节
-    if current_section and current_content:
-        sections[current_section] = '\n'.join(current_content)
+    if current_section_title:
+        sections[current_section_title] = '\n'.join(current_content).strip()
 
-    # 调试输出
     print("Parsed sections:", list(sections.keys()))
-
     return sections
+
+def _post_process_sections(sections: Dict[str, str]) -> Dict[str, str]:
+    """后处理章节，合并相关内容和清理格式"""
+    processed_sections = {}
+
+    for section_name, content in sections.items():
+        # 清理内容
+        cleaned_content = _clean_section_content(content)
+
+        # 如果内容太短，可能不是有效章节
+        if len(cleaned_content.strip()) < 10:
+            continue
+
+        # 合并相似的章节名
+        merged_name = _merge_similar_section_names(section_name, list(processed_sections.keys()))
+
+        if merged_name and merged_name in processed_sections:
+            # 合并到已存在的章节
+            processed_sections[merged_name] += f"\n\n{cleaned_content}"
+        else:
+            # 新章节
+            processed_sections[section_name] = cleaned_content
+
+    return processed_sections
+
+
+def _clean_section_content(content: str) -> str:
+    """清理章节内容"""
+    # 移除多余的空行
+    content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
+
+    # 移除开头和结尾的空白
+    content = content.strip()
+
+    # 移除可能的思考过程残留
+    content = re.sub(r'让我.*?[。，\n]', '', content)
+    content = re.sub(r'我来.*?[。，\n]', '', content)
+    content = re.sub(r'思考.*?[。，\n]', '', content)
+
+    return content
+
+
+def _merge_similar_section_names(new_name: str, existing_names: List[str]) -> str:
+    """合并相似的章节名称"""
+    # 定义相似章节的映射
+    similar_mappings = [
+        ['教学目标', '学习目标'],
+        ['跨学科关联', '跨学科关联分析', '学科融合'],
+        ['教学步骤', '详细教学步骤', '教学流程'],
+        ['评估方法', '评价方式', '评估方式'],
+        ['延伸活动', '拓展活动', '课外活动']
+    ]
+
+    for mapping in similar_mappings:
+        if new_name in mapping:
+            for existing_name in existing_names:
+                if existing_name in mapping:
+                    return existing_name
+
+    return None
 
 
 @app.post("/generate-lesson")
@@ -285,6 +313,9 @@ async def recommend_media_for_section(session_id: str, request: AutoMediaRequest
             else:  # video
                 media_content += f"- **标题:** {item.get('title', 'Unknown')}\n"
                 media_content += f"- **视频链接:** {item['url']}\n"
+                media_content += f"- **作者:** {item.get('author', 'Unknown')}\n"
+                media_content += f"- **时长:** {item.get('duration', 'Unknown')}\n"
+                media_content += f"- **播放量:** {item.get('play', 0)}\n"
                 media_content += f"- **描述:** {item.get('description', 'No description')}\n\n"
 
         additional_info = {

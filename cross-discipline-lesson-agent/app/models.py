@@ -46,10 +46,37 @@ class MediaItem(BaseModel):
     description: Optional[str] = None   # 描述
     link: Optional[str] = None      # 原始链接
 
+# 新增：B站视频信息模型
+class BilibiliVideoItem(BaseModel):
+    title: str                      # 视频标题
+    bvid: str                       # B站视频ID
+    url: str                        # 视频链接
+    thumbnail: str                  # 缩略图
+    description: str                # 视频描述
+    author: str                     # UP主
+    duration: str                   # 视频时长
+    play: int                       # 播放量
+    video_review: int               # 弹幕数
+
+# 增强的媒体资源信息模型
+class EnhancedMediaItem(BaseModel):
+    url: str                        # 资源URL
+    title: Optional[str] = None     # 标题（视频用）
+    thumbnail: Optional[str] = None # 缩略图
+    photographer: Optional[str] = None  # 摄影师（图片用）
+    description: Optional[str] = None   # 描述
+    link: Optional[str] = None      # 原始链接
+    # B站专用字段
+    bvid: Optional[str] = None      # B站视频ID
+    author: Optional[str] = None    # UP主/作者
+    duration: Optional[str] = None  # 时长
+    play: Optional[int] = None      # 播放量
+    video_review: Optional[int] = None # 弹幕数
+
 # 新增：媒体推荐响应模型
 class MediaRecommendationResponse(BaseModel):
     section_name: str               # 章节名称
     keywords_used: str              # 使用的搜索关键词
     media_type: str                 # 媒体类型
-    results: List[MediaItem]        # 推荐结果
+    results: List[EnhancedMediaItem] # 推荐结果
     total_found: int                # 找到的总数
