@@ -64,7 +64,7 @@ class InnosparkClient:
     def _call_ai_api(self, prompt: str) -> str:
         """调用AI API的统一方法"""
         data = {
-            "model": "InnoSpark-R",
+            "model": "InnoSpark",
             "messages": [{"role": "user", "content": prompt}],
             "stream": False
         }

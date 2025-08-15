@@ -4,8 +4,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Innospark API 配置
-INNOSPARK_API_KEY = os.getenv("INNOSPARK_API_KEY", "xO58f7xmBTqWfQqU4i3Tlg5rc3FXyzAlCgXeUfEMaIx6oufhM0LTrTsoZBYpe8kDps2LuphB_1Ul6tP78_vpyA==")
-INNOSPARK_API_URL = "http://120.55.167.27:9002/v1/chat/completions"
+INNOSPARK_API_KEY = os.getenv("INNOSPARK_API_KEY", "7V1rpBFgK0DOHPh95pMP8Sxe1DXK_7c0UGJ5Fxpi_ejZiDvklCz38ev2_iLs7VxdaDslykF-DRJQhZDwOD7ZNA==")
+INNOSPARK_API_URL = "http://120.55.167.27:9001/v1/chat/completions"
 
 # 媒体API配置 (示例)
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "flNU12jcrAIw4suVytmjFMk5qHfEznVdTyOEXgolR2RxO6kOcsDO0hkx")

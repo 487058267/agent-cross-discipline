@@ -27,7 +27,7 @@ class MediaRecommender:
         """
 
         data = {
-            "model": "InnoSpark-R",
+            "model": "InnoSpark",
             "messages": [{"role": "user", "content": prompt}],
             "stream": False
         }
@@ -57,23 +57,31 @@ class MediaRecommender:
             return self._simple_keyword_extraction(section_content)
 
     def _clean_ai_response(self, content: str) -> str:
-        """清理AI响应，移除思考标签和多余内容"""
+        """增强的AI响应清理，移除思考标签、Markdown和无关字符"""
         # 移除各种可能的思考标签
         content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
         content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
         content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL)
 
-        # 移除其他可能的XML标签
+        # 移除其他可能的XML/HTML标签
         content = re.sub(r'<[^>]+>', '', content)
 
-        # 移除"让我想想"、"思考一下"等表述
-        content = re.sub(r'让我.*?[。，]', '', content)
-        content = re.sub(r'我来.*?[。，]', '', content)
-        content = re.sub(r'思考.*?[。，]', '', content)
+        # 移除"让我想想"、"思考一下"等引导性词语
+        content = re.sub(r'^\s*好的，关键词是：', '', content)
+        content = re.sub(r'^\s*关键词：', '', content)
+        content = re.sub(r'让我.*?[。，\n]', '', content)
+        content = re.sub(r'我来.*?[。，\n]', '', content)
+        content = re.sub(r'思考.*?[。，\n]', '', content)
 
-        # 清理多余的空行和空白
-        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
-        content = content.strip()
+        # 新增：移除Markdown语法字符，如 #, *, -, ` 等
+        content = re.sub(r'[#*`\-]', '', content)
+
+        # 新增：移除所有非单词、非空格的字符（保留中文）
+        # 这个正则表达式会保留字母、数字、下划线和中文字符
+        content = re.sub(r'[^\w\s\u4e00-\u9fa5]', '', content, flags=re.UNICODE)
+
+        # 清理多余的空行和前后空白
+        content = re.sub(r'\s+', ' ', content).strip()
 
         return content
 

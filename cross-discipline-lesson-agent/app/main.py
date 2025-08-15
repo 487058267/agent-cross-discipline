@@ -79,31 +79,36 @@ def save_as_markdown(session_id: str, content: str, content_type: str = "lesson_
 
 def parse_lesson_sections(lesson_plan: str) -> Dict[str, str]:
     """
-    精确解析教案，仅将 "### [数字]. [标题]" 格式的行识别为顶级章节。
+    精确解析教案，识别以 '## 中文数字、标题' 或 '## 阿拉伯数字. 标题' 格式的行作为顶级章节。
     """
     sections = {}
     current_section_title = None
     current_content = []
 
-    # 这个正则表达式非常严格：
-    # ^###       -> 必须以 ### 开头
-    # \s*        -> 任意数量的空格
-    # \d+\.      -> 一个或多个数字，后面跟一个点
-    # \s+        -> 至少一个空格
-    # (.*)       -> 捕获标题的剩余部分
-    main_heading_pattern = re.compile(r'^###\s*\d+\.\s+(.*)')
+    # 这个正则表达式旨在捕获您的教案中的主要章节标题格式：
+    # 例如： "## 一、教学目标" 或 "## 1. 教学目标"
+    # 注意：这里我们只匹配两个井号，如果您希望也匹配三个井号的顶级章节，可以把 ## 改成 #+
+    # 但根据您给出的教案，主要章节都是 ##
+    main_heading_pattern = re.compile(r'^##\s*(?:([一二三四五六七八九十]+、)\s*|(\d+)\.\s*)(.*)')
+
 
     for line in lesson_plan.split('\n'):
         match = main_heading_pattern.match(line)
 
         if match:
             # 找到一个新的主章节标题
-            # 1. 保存上一个章节的内容
             if current_section_title:
                 sections[current_section_title] = '\n'.join(current_content).strip()
 
-            # 2. 设置新的、干净的章节标题
-            current_section_title = match.group(1).strip()
+            # 提取标题内容，根据是中文编号还是阿拉伯数字编号来取正确的捕获组
+            if match.group(1): # 如果中文编号部分匹配了 (如 "一、")
+                current_section_title = match.group(3).strip() # 取第三个捕获组，即标题文本
+            elif match.group(2): # 如果阿拉伯数字编号部分匹配了 (如 "1.")
+                current_section_title = match.group(3).strip() # 取第三个捕获组，即标题文本
+            else: # Fallback，虽然按照设计应该不会到这里
+                current_section_title = match.group(3).strip() # 再次尝试第三个捕获组，确保不会为空
+
+
             current_content = []
 
         elif current_section_title:
@@ -112,7 +117,7 @@ def parse_lesson_sections(lesson_plan: str) -> Dict[str, str]:
 
     # 保存最后一个章节
     if current_section_title:
-        sections[current_section_title] = '\n'.join(current_content).strip()
+        sections[current_section_title] = '\n\join(current_content).strip()'
 
     print("Parsed sections:", list(sections.keys()))
     return sections
