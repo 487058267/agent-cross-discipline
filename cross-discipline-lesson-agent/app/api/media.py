@@ -2,9 +2,11 @@ import requests
 import re
 import json
 from typing import List, Dict
+
 from config.settings import PEXELS_API_KEY, INNOSPARK_API_KEY, INNOSPARK_API_URL
 from bs4 import BeautifulSoup
 import urllib.parse
+import time  # 用于简单的反爬延时
 
 
 class MediaRecommender:
@@ -13,21 +15,71 @@ class MediaRecommender:
             "Authorization": f"Bearer {INNOSPARK_API_KEY}",
             "Content-Type": "application/json"
         }
+        # 通用的User-Agent，模拟浏览器行为，降低被封禁的风险
+        self.common_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+            'Connection': 'keep-alive',
+            'Referer': 'https://www.google.com/'  # 模拟从Google跳转
+        }
+
+    def _clean_ai_response_for_keywords(self, content: str) -> str:
+        """专门用于清理AI生成的关键词响应，去除无关的格式和解释"""
+        # 移除各种可能的思考标签
+        content = re.sub(r'<[^>]+>', '', content, flags=re.DOTALL)  # 移除所有XML/HTML标签
+
+        # 移除引导性词语和解释 (使用 re.M 确保多行匹配)
+        content = re.sub(r'^\s*好的，关键词是：', '', content, flags=re.M)
+        content = re.sub(r'^\s*关键词：', '', content, flags=re.M)
+        content = re.sub(r'让我.*?[。，\n]', '', content, flags=re.M)
+        content = re.sub(r'我来.*?[。，\n]', '', content, flags=re.M)
+        content = re.sub(r'思考.*?[。，\n]', '', content, flags=re.M)
+
+        # 移除Markdown的标题符号、列表符号、粗体斜体等，以及多余的标点
+        # 仅保留中文、英文、数字和空格，确保干净的搜索关键词
+        # 移除了所有非字母数字和非中文字符，除了空格
+        content = re.sub(r'[^\w\s\u4e00-\u9fa5]', '', content, flags=re.UNICODE)
+
+        # 清理多余的空行和前后空白
+        content = re.sub(r'\s+', ' ', content).strip()
+        return content
+
+    def _simple_keyword_extraction(self, content: str) -> str:
+        """简单的关键词提取作为备选方案，仅用于AI提取失败时"""
+        try:
+            # 确保安装了 jieba: pip install jieba
+            import jieba
+            words = jieba.lcut(content)
+        except ImportError:
+            # 如果没有jieba，使用简单的分词
+            words = content.split()
+
+        # 简单的停用词列表，这里可以扩展
+        stop_words = {'的', '是', '在', '了', '和', '有', '为', '与', '等', '及', '或', '也', '将', '可以', '能够',
+                      '通过', '进行', '学生', '教师', '课堂', '教学', '学习', '活动', '内容', '目标', '过程',
+                      '方法'}  # 增加了教学相关的停用词
+
+        # 过滤停用词并选择前几个有意义的词
+        keywords = [word for word in words if len(word) > 1 and word not in stop_words][:5]
+        return ' '.join(keywords)
 
     def extract_keywords_from_section(self, section_content: str, section_name: str) -> str:
         """使用AI从教案部分提取关键词用于媒体搜索"""
+        # 优化后的提示词
         prompt = f"""
-        请从以下教案的"{section_name}"部分中提取最适合用于搜索相关图片和视频的关键词。
-        请用简洁的中文关键词，多个关键词用空格分隔，不超过10个字。
+        请从以下教案的"{section_name}"部分中提取最适合用于搜索相关图片和视频的中文关键词。
+        关键词之间用空格分隔，不要超过10个字。
+        关键词应直接反映内容核心，**不要包含任何Markdown符号、序号或多余解释**。
 
         教案内容：
         {section_content}
 
-        请直接返回关键词，不要其他解释和思考过程：
+        纯关键词：
         """
 
         data = {
-            "model": "InnoSpark",
+            "model": "InnoSpark",  # 确保这里是您正在使用的Innospark模型名称
             "messages": [{"role": "user", "content": prompt}],
             "stream": False
         }
@@ -44,63 +96,26 @@ class MediaRecommender:
                 result = response.json()
                 if "choices" in result and len(result["choices"]) > 0:
                     keywords = result["choices"][0]["message"]["content"].strip()
-                    # 清理可能的think标签和多余内容
-                    keywords = self._clean_ai_response(keywords)
+                    # 调用新的清理函数来处理AI的原始输出
+                    keywords = self._clean_ai_response_for_keywords(keywords)
+                    # 打印清理后的关键词，方便调试
+                    print(f"Keywords extracted by AI and cleaned for section '{section_name}': '{keywords}'")
+                    if not keywords or len(keywords.split()) < 1:  # 如果清理后关键词为空或太少，使用备选
+                        return self._simple_keyword_extraction(section_content)
                     return keywords
                 else:
+                    print(f"Innospark AI did not return valid choices for keyword extraction. Response: {result}")
                     return self._simple_keyword_extraction(section_content)
             else:
+                print(f"Innospark AI API error during keyword extraction: {response.status_code} - {response.text}")
                 return self._simple_keyword_extraction(section_content)
 
-        except Exception as e:
-            print(f"AI keyword extraction failed: {e}")
+        except requests.exceptions.RequestException as e:
+            print(f"Innospark AI keyword extraction request failed: {e}")
             return self._simple_keyword_extraction(section_content)
-
-    def _clean_ai_response(self, content: str) -> str:
-        """增强的AI响应清理，移除思考标签、Markdown和无关字符"""
-        # 移除各种可能的思考标签
-        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL)
-
-        # 移除其他可能的XML/HTML标签
-        content = re.sub(r'<[^>]+>', '', content)
-
-        # 移除"让我想想"、"思考一下"等引导性词语
-        content = re.sub(r'^\s*好的，关键词是：', '', content)
-        content = re.sub(r'^\s*关键词：', '', content)
-        content = re.sub(r'让我.*?[。，\n]', '', content)
-        content = re.sub(r'我来.*?[。，\n]', '', content)
-        content = re.sub(r'思考.*?[。，\n]', '', content)
-
-        # 新增：移除Markdown语法字符，如 #, *, -, ` 等
-        content = re.sub(r'[#*`\-]', '', content)
-
-        # 新增：移除所有非单词、非空格的字符（保留中文）
-        # 这个正则表达式会保留字母、数字、下划线和中文字符
-        content = re.sub(r'[^\w\s\u4e00-\u9fa5]', '', content, flags=re.UNICODE)
-
-        # 清理多余的空行和前后空白
-        content = re.sub(r'\s+', ' ', content).strip()
-
-        return content
-
-    def _simple_keyword_extraction(self, content: str) -> str:
-        """简单的关键词提取作为备选方案"""
-        try:
-            import jieba
-            words = jieba.lcut(content)
-        except ImportError:
-            # 如果没有jieba，使用简单的分词
-            words = content.split()
-
-        # 简单的停用词列表
-        stop_words = {'的', '是', '在', '了', '和', '有', '为', '与', '等', '及', '或', '也', '将', '可以', '能够',
-                      '通过', '进行', '学生', '教师', '课堂', '教学', '学习', '活动', '内容'}
-
-        # 过滤停用词并选择前几个词
-        keywords = [word for word in words if len(word) > 1 and word not in stop_words][:5]
-        return ' '.join(keywords)
+        except Exception as e:
+            print(f"An unexpected error occurred during AI keyword extraction: {e}")
+            return self._simple_keyword_extraction(section_content)
 
     def get_images_for_section(self, section_content: str, section_name: str, count: int = 3) -> List[Dict]:
         """根据教案部分内容获取相关图片"""
@@ -112,144 +127,144 @@ class MediaRecommender:
         keywords = self.extract_keywords_from_section(section_content, section_name)
         return self.get_videos(keywords, count)
 
-
     def get_images(self, query: str, count: int = 3) -> List[Dict]:
-        """从Pexels获取相关图片，并优化中文查询。"""
+        """
+        从 Pexels API 获取相关图片，并优化中文查询。
+        """
         headers = {"Authorization": PEXELS_API_KEY}
 
-        # --- 新增的优化逻辑 ---
-        # 只取前两个关键词进行搜索，以提高Pexels的匹配精度
-        simple_query = " ".join(query.split()[:2])
-        print(f"Original query: '{query}', Simplified query for Pexels: '{simple_query}'")
-        # ----------------------
+        # 只取前几个关键词进行搜索，以提高Pexels的匹配精度
+        # Pexels 对中文支持较好，可以直接使用。
+        # 如果关键词是多个词语，Pexels会按空格分隔进行搜索。
+        simple_query = " ".join(query.split()[:3])  # 限制到前3个词，避免过长查询
+        print(f"Searching Pexels Images for: '{simple_query}' (Original: '{query}')")
 
         # 使用简化的查询，并添加中文语言环境提示
-        url = f"https://api.pexels.com/v1/search?query={simple_query}&per_page={count}&locale=zh-CN"
+        url = f"https://api.pexels.com/v1/search?query={urllib.parse.quote(simple_query)}&per_page={count}&locale=zh-CN"
 
         try:
             response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                photos = response.json().get("photos", [])
-                return [{
-                    "url": photo["src"]["original"],
-                    "thumbnail": photo["src"]["medium"],
+            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+
+            photos = response.json().get("photos", [])
+            results = []
+            for photo in photos:
+                # Pexels API返回的图片URL通常有多种尺寸，选择 'original' 或 'large'
+                results.append({
+                    "url": photo["src"]["original"],  # 原始大图
+                    "thumbnail": photo["src"]["medium"],  # 中等大小图作为缩略图
                     "photographer": photo["photographer"],
-                    "link": photo["url"],
-                    "description": photo.get("alt", "")
-                } for photo in photos]
-            else:
-                print(f"Pexels API error: {response.status_code} - {response.text}")
-                return []
+                    "link": photo["url"],  # Pexels 页面链接
+                    "description": photo.get("alt", "")  # 图片描述
+                })
+            return results
+        except requests.exceptions.RequestException as e:
+            print(f"Pexels API request failed: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            print(f"Pexels API response JSON decode error: {e}")
+            return []
         except Exception as e:
-            print(f"Pexels API error: {e}")
+            print(f"An unexpected error occurred during Pexels API call: {e}")
             return []
 
     def get_videos(self, query: str, count: int = 3) -> List[Dict]:
-        """从B站搜索相关视频"""
-        try:
-            # B站搜索API
-            search_url = "https://api.bilibili.com/x/web-interface/search/type"
-            params = {
-                "search_type": "video",
-                "keyword": query,
-                "page": 1,
-                "page_size": count
-            }
-
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Referer': 'https://www.bilibili.com'
-            }
-
-            response = requests.get(search_url, params=params, headers=headers, timeout=30)
-
-            if response.status_code == 200:
-                data = response.json()
-                videos = []
-
-                if data.get("code") == 0 and "data" in data and "result" in data["data"]:
-                    for item in data["data"]["result"][:count]:
-                        video_info = {
-                            "title": self._clean_html(item.get("title", "")),
-                            "bvid": item.get("bvid", ""),
-                            "url": f"https://www.bilibili.com/video/{item.get('bvid', '')}",
-                            "thumbnail": item.get("pic", "").replace("http:", "https:"),
-                            "description": self._clean_html(item.get("description", ""))[:200] + "..." if len(
-                                item.get("description", "")) > 200 else self._clean_html(item.get("description", "")),
-                            "author": item.get("author", ""),
-                            "duration": self._format_duration(item.get("duration", "")),
-                            "play": item.get("play", 0),
-                            "video_review": item.get("video_review", 0)
-                        }
-                        videos.append(video_info)
-
-                return videos
-            else:
-                # 如果API失败，尝试备用方法
-                return self._search_bilibili_backup(query, count)
-
-        except Exception as e:
-            print(f"B站视频搜索失败: {e}")
-            # 返回备用搜索结果或空列表
-            return self._search_bilibili_backup(query, count)
-
-
-    def _search_bilibili_backup(self, query: str, count: int = 3) -> List[Dict]:
         """
-        B站备用搜索方法 - 通过网页抓取实现，更可靠。
+        从B站搜索相关视频 (通过网页抓取)。
+        请注意：B站网页结构可能变化，导致抓取失败。
         """
-        print(f"Bilibili API failed, using web scraping backup for query: '{query}'")
+        print(f"Searching Bilibili (web scraping) for: '{query}'")
         try:
-            search_url = f"https://search.bilibili.com/all?keyword={urllib.parse.quote(query)}"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7'
-            }
+            # B站搜索URL，通常包含关键字和一些参数
+            # 使用 urllib.parse.quote 来正确编码查询字符串
+            search_url = f"https://search.bilibili.com/all?keyword={urllib.parse.quote(query)}&from_source=web_search&order=totalrank&duration=0&tids_1=-1&__refresh__=true&page=1"
+
+            # 使用通用的headers，并设置Referer，模拟浏览器行为
+            headers = self.common_headers.copy()
+            headers['Referer'] = 'https://www.bilibili.com/'
 
             response = requests.get(search_url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                video_items = soup.find_all('div', class_='video-item')
-                videos = []
+            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
 
-                for item in video_items[:count]:
-                    title_tag = item.find('a', class_='title')
-                    if not title_tag:
-                        continue
+            soup = BeautifulSoup(response.text, 'html.parser')
 
-                    title = title_tag.get('title', 'N/A')
-                    url = 'https:' + title_tag.get('href', '')
-                    bvid = url.split('/video/')[1].split('?')[0] if '/video/' in url else 'N/A'
+            # 查找视频列表项。根据B站目前的搜索结果页面结构，视频卡片通常是 `li.video-item` 或 `div.bili-video-card`
+            # 优先尝试 'video-item' (旧版)，然后是 'bili-video-card' (新版)
+            video_items = soup.find_all('li', class_='video-item')
+            if not video_items:
+                video_items = soup.find_all('div', class_=re.compile(r'bili-video-card'))
 
-                    thumbnail_tag = item.find('img')
-                    thumbnail = 'https:' + thumbnail_tag.get('src', '') if thumbnail_tag else ''
+            videos = []
 
-                    desc_tag = item.find('div', class_='des')
-                    description = desc_tag.text.strip() if desc_tag else ''
+            for item in video_items[:count]:
+                # 提取标题和URL
+                title_tag = item.find('a', class_='title') or item.find('h3', class_='bili-video-card__info--tit')
+                if not title_tag:
+                    continue
 
-                    author_tag = item.find('a', class_='up-name')
-                    author = author_tag.text.strip() if author_tag else 'N/A'
+                title = title_tag.get('title', 'N/A').strip()
+                raw_url = title_tag.get('href', '')
+                url = 'https:' + raw_url if raw_url.startswith('//') else raw_url
 
-                    duration_tag = item.find('span', class_='duration')
-                    duration = duration_tag.text.strip() if duration_tag else 'N/A'
+                # 提取bvid
+                bvid_match = re.search(r'/video/(BV[a-zA-Z0-9]+)', url)
+                bvid = bvid_match.group(1) if bvid_match else 'N/A'
 
-                    video_info = {
-                        "title": title,
-                        "bvid": bvid,
-                        "url": url,
-                        "thumbnail": thumbnail,
-                        "description": description,
-                        "author": author,
-                        "duration": duration,
-                        "play": 0,  # Web scraping doesn't easily get play count
-                        "video_review": 0
-                    }
-                    videos.append(video_info)
-                return videos
-            else:
-                return []
+                # 提取缩略图
+                thumbnail_tag = item.find('img')
+                # B站缩略图有时是data-src，有时是src，需要清理 //
+                thumbnail = 'https:' + (thumbnail_tag.get('data-src') or thumbnail_tag.get('src', '')).replace('//',
+                                                                                                               '') if thumbnail_tag else ''
+
+                # 提取描述
+                description_tag = item.find('p', class_='des') or item.find('div', class_='bili-video-card__info--desc')
+                description = description_tag.text.strip() if description_tag else ''
+
+                # 提取UP主名称
+                author_tag = item.find('a', class_='up-name') or item.find('span',
+                                                                           class_='bili-video-card__info--author')
+                author = author_tag.text.strip() if author_tag else 'N/A'
+
+                # 提取视频时长
+                duration_tag = item.find('span', class_='duration') or item.find('div',
+                                                                                 class_='bili-video-card__stats--duration')
+                duration = duration_tag.text.strip() if duration_tag else 'N/A'
+
+                # 提取播放量和弹幕数，需要从文本中提取数字
+                play_tag = item.find('span', class_='play-count') or item.find('span',
+                                                                               class_='bili-video-card__stats--item icon-play')
+                play_text = play_tag.text.strip() if play_tag else '0'
+                play = int(re.sub(r'\D', '', play_text)) if re.sub(r'\D', '', play_text).isdigit() else 0  # 移除非数字字符
+
+                video_review_tag = item.find('span', class_='danmu-count') or item.find('span',
+                                                                                        class_='bili-video-card__stats--item icon-danmu')
+                video_review_text = video_review_tag.text.strip() if video_review_tag else '0'
+                video_review = int(re.sub(r'\D', '', video_review_text)) if re.sub(r'\D', '',
+                                                                                   video_review_text).isdigit() else 0  # 移除非数字字符
+
+                video_info = {
+                    "title": self._clean_html(title),
+                    "bvid": bvid,
+                    "url": url,
+                    "thumbnail": thumbnail,
+                    "description": self._clean_html(description)[:200] + "..." if len(
+                        self._clean_html(description)) > 200 else self._clean_html(description),
+                    "author": author,
+                    "duration": duration,
+                    "play": play,
+                    "video_review": video_review
+                }
+                videos.append(video_info)
+                time.sleep(0.1)  # 增加少量延时，模拟人类行为，减少被识别为爬虫的风险
+
+            if not videos:
+                print(f"No videos found for query '{query}' or scraping failed.")
+            return videos
+        except requests.exceptions.RequestException as e:
+            print(f"Bilibili web scraping request failed: {e}")
+            return []
         except Exception as e:
-            print(f"Bilibili web scraping backup failed: {e}")
+            print(f"An unexpected error occurred during Bilibili web scraping: {e}")
             return []
 
     def _clean_html(self, text: str) -> str:
@@ -258,8 +273,10 @@ class MediaRecommender:
             return ""
         # 移除HTML标签
         clean_text = re.sub(r'<[^>]+>', '', text)
-        # 解码HTML实体
-        clean_text = clean_text.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+        # 解码HTML实体 (例如 &lt; -> <)
+        clean_text = clean_text.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&').replace('&quot;',
+                                                                                                        '"').replace(
+            '&apos;', "'")
         return clean_text.strip()
 
     def _format_duration(self, duration) -> str:
@@ -267,14 +284,20 @@ class MediaRecommender:
         if not duration:
             return "未知"
 
-        if isinstance(duration, str):
+        # B站网页抓取通常直接返回 "MM:SS" 或 "HH:MM:SS" 格式，可以直接使用
+        if isinstance(duration, str) and re.match(r'(\d{1,2}:)?\d{2}:\d{2}', duration):
             return duration
 
-        # 如果是秒数，转换为分:秒格式
+        # 如果是秒数，转换为分:秒格式 (以防万一)
         try:
             total_seconds = int(duration)
             minutes = total_seconds // 60
             seconds = total_seconds % 60
+            # 考虑时长超过一小时的情况
+            if minutes >= 60:
+                hours = minutes // 60
+                minutes = minutes % 60
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             return f"{minutes:02d}:{seconds:02d}"
         except (ValueError, TypeError):
             return str(duration)
