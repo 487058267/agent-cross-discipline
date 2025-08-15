@@ -170,16 +170,14 @@ class MediaRecommender:
 
     def get_videos(self, query: str, count: int = 3) -> List[Dict]:
         """
-        从B站搜索相关视频 (通过网页抓取)。
-        请注意：B站网页结构可能变化，导致抓取失败。
+        从B站搜索相关视频 (通过网页抓取实现)。
+        注意：B站网页结构可能会随时变化，导致抓取失败。
         """
         print(f"Searching Bilibili (web scraping) for: '{query}'")
         try:
-            # B站搜索URL，通常包含关键字和一些参数
-            # 使用 urllib.parse.quote 来正确编码查询字符串
+            # B站搜索URL，确保编码
             search_url = f"https://search.bilibili.com/all?keyword={urllib.parse.quote(query)}&from_source=web_search&order=totalrank&duration=0&tids_1=-1&__refresh__=true&page=1"
 
-            # 使用通用的headers，并设置Referer，模拟浏览器行为
             headers = self.common_headers.copy()
             headers['Referer'] = 'https://www.bilibili.com/'
 
@@ -188,59 +186,100 @@ class MediaRecommender:
 
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # 查找视频列表项。根据B站目前的搜索结果页面结构，视频卡片通常是 `li.video-item` 或 `div.bili-video-card`
-            # 优先尝试 'video-item' (旧版)，然后是 'bili-video-card' (新版)
-            video_items = soup.find_all('li', class_='video-item')
+            # 查找视频列表项。优先匹配新版结构 'bili-video-card'
+            video_items = soup.find_all('div', class_=re.compile(r'bili-video-card'))
+            # 如果新版找不到，尝试旧版 'video-item'
             if not video_items:
-                video_items = soup.find_all('div', class_=re.compile(r'bili-video-card'))
+                video_items = soup.find_all('li', class_='video-item')
 
             videos = []
 
             for item in video_items[:count]:
-                # 提取标题和URL
-                title_tag = item.find('a', class_='title') or item.find('h3', class_='bili-video-card__info--tit')
-                if not title_tag:
-                    continue
+                title = 'N/A'
+                url = ''
+                bvid = 'N/A'
+                thumbnail = ''
+                description = ''
+                author = 'N/A'
+                duration = 'N/A'
+                play = 0
+                video_review = 0
 
-                title = title_tag.get('title', 'N/A').strip()
-                raw_url = title_tag.get('href', '')
-                url = 'https:' + raw_url if raw_url.startswith('//') else raw_url
+                # --- 提取标题和URL ---
+                # 新版结构：标题通常在 h3.bili-video-card__info--tit 下的 a 标签
+                title_h3 = item.find('h3', class_='bili-video-card__info--tit')
+                if title_h3:
+                    title_a_tag = title_h3.find('a')
+                    if title_a_tag:
+                        title = title_a_tag.get('title', 'N/A').strip()
+                        raw_url = title_a_tag.get('href', '')
+                        url = 'https:' + raw_url if raw_url.startswith('//') else raw_url
 
-                # 提取bvid
-                bvid_match = re.search(r'/video/(BV[a-zA-Z0-9]+)', url)
-                bvid = bvid_match.group(1) if bvid_match else 'N/A'
+                # 旧版结构：标题直接是 class='title' 的 a 标签
+                if not url:  # 如果新版没找到，尝试旧版
+                    title_a_tag_old = item.find('a', class_='title')
+                    if title_a_tag_old:
+                        title = title_a_tag_old.get('title', 'N/A').strip()
+                        raw_url = title_a_tag_old.get('href', '')
+                        url = 'https:' + raw_url if raw_url.startswith('//') else raw_url
 
-                # 提取缩略图
+                # 如果URL仍然不完整，检查是否是相对路径，并拼接完整
+                if url and not url.startswith('http'):
+                    url = urllib.parse.urljoin('https://www.bilibili.com/', url)
+
+                # --- 提取bvid ---
+                if url != '':
+                    bvid_match = re.search(r'/video/(BV[a-zA-Z0-9]+)', url)
+                    if bvid_match:
+                        bvid = bvid_match.group(1)
+
+                # --- 提取缩略图 ---
                 thumbnail_tag = item.find('img')
-                # B站缩略图有时是data-src，有时是src，需要清理 //
-                thumbnail = 'https:' + (thumbnail_tag.get('data-src') or thumbnail_tag.get('src', '')).replace('//',
-                                                                                                               '') if thumbnail_tag else ''
+                if thumbnail_tag:
+                    # 尝试 data-src (懒加载图片) 或 src
+                    thumb_src = thumbnail_tag.get('data-src') or thumbnail_tag.get('src')
+                    if thumb_src:
+                        # 确保是完整的 https URL
+                        thumbnail = 'https:' + thumb_src.replace('//', '') if thumb_src.startswith('//') else thumb_src
+                        # 移除B站图片的一些裁剪参数，获取更通用的URL
+                        if '@' in thumbnail:
+                            thumbnail = thumbnail.split('@')[0]
 
-                # 提取描述
+                # --- 提取描述 ---
                 description_tag = item.find('p', class_='des') or item.find('div', class_='bili-video-card__info--desc')
-                description = description_tag.text.strip() if description_tag else ''
+                if description_tag:
+                    description = description_tag.text.strip()
 
-                # 提取UP主名称
+                # --- 提取UP主名称 ---
                 author_tag = item.find('a', class_='up-name') or item.find('span',
                                                                            class_='bili-video-card__info--author')
-                author = author_tag.text.strip() if author_tag else 'N/A'
+                if author_tag:
+                    author = author_tag.text.strip()
 
-                # 提取视频时长
+                # --- 提取视频时长 ---
                 duration_tag = item.find('span', class_='duration') or item.find('div',
                                                                                  class_='bili-video-card__stats--duration')
-                duration = duration_tag.text.strip() if duration_tag else 'N/A'
+                if duration_tag:
+                    duration = duration_tag.text.strip()
 
-                # 提取播放量和弹幕数，需要从文本中提取数字
+                # --- 提取播放量和弹幕数 ---
+                # 播放量
                 play_tag = item.find('span', class_='play-count') or item.find('span',
                                                                                class_='bili-video-card__stats--item icon-play')
-                play_text = play_tag.text.strip() if play_tag else '0'
-                play = int(re.sub(r'\D', '', play_text)) if re.sub(r'\D', '', play_text).isdigit() else 0  # 移除非数字字符
+                if play_tag:
+                    play_text = play_tag.text.strip()
+                    numeric_play = re.sub(r'\D', '', play_text)  # 移除非数字字符
+                    if numeric_play:
+                        play = int(numeric_play)
 
+                # 弹幕数
                 video_review_tag = item.find('span', class_='danmu-count') or item.find('span',
                                                                                         class_='bili-video-card__stats--item icon-danmu')
-                video_review_text = video_review_tag.text.strip() if video_review_tag else '0'
-                video_review = int(re.sub(r'\D', '', video_review_text)) if re.sub(r'\D', '',
-                                                                                   video_review_text).isdigit() else 0  # 移除非数字字符
+                if video_review_tag:
+                    video_review_text = video_review_tag.text.strip()
+                    numeric_review = re.sub(r'\D', '', video_review_text)  # 移除非数字字符
+                    if numeric_review:
+                        video_review = int(numeric_review)
 
                 video_info = {
                     "title": self._clean_html(title),
@@ -250,22 +289,25 @@ class MediaRecommender:
                     "description": self._clean_html(description)[:200] + "..." if len(
                         self._clean_html(description)) > 200 else self._clean_html(description),
                     "author": author,
-                    "duration": duration,
+                    "duration": self._format_duration(duration),
                     "play": play,
                     "video_review": video_review
                 }
                 videos.append(video_info)
-                time.sleep(0.1)  # 增加少量延时，模拟人类行为，减少被识别为爬虫的风险
+                time.sleep(0.1)  # 增加少量延时
 
             if not videos:
-                print(f"No videos found for query '{query}' or scraping failed.")
+                print(f"No videos found for query '{query}' or scraping failed in detail extraction.")
             return videos
         except requests.exceptions.RequestException as e:
             print(f"Bilibili web scraping request failed: {e}")
             return []
         except Exception as e:
             print(f"An unexpected error occurred during Bilibili web scraping: {e}")
+            import traceback
+            traceback.print_exc()  # 打印完整堆栈信息，帮助调试
             return []
+
 
     def _clean_html(self, text: str) -> str:
         """清理HTML标签"""
