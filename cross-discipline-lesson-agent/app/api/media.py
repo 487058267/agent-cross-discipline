@@ -1,12 +1,18 @@
 import requests
 import re
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional
 from config.settings import PEXELS_API_KEY, INNOSPARK_API_KEY, INNOSPARK_API_URL
 from bs4 import BeautifulSoup
 import urllib.parse
-import time  # 用于简单的反爬延时
+import time
+import hashlib
 
+# 假设的 COOKIES，请替换为你自己从浏览器获取的有效 COOKIES
+# 注意：生产环境不建议硬编码敏感信息，且COOKIE可能需要定期更新或通过登录流程获取
+# 为了测试目的，你可以从浏览器登录B站后，F12 -> Network -> 刷新页面 -> 找到任意请求 -> Headers -> Request Headers -> Cookie 复制
+# 至少包含 SESSDATA, bili_jct, DedeUserID, buvid3 等关键cookie
+MOCK_BILIBILI_COOKIES = "header_theme_version=CLOSE; enable_web_push=DISABLE; buvid_fp=f17cb46480b83ab69fcbf35968aa5cba; rpdid=|(J~k))m~JuR0J'u~kmuYuJlm; buvid3=5C2B99C2-B188-4C73-4529-C60783E0661301409infoc; b_nut=1754904001; _uuid=4B1455BD-FDB8-57B10-94DA-4296226D8110A02933infoc; CURRENT_QUALITY=0; buvid4=BC025B76-6D35-2C6C-44AF-DD358083DD2E26448-023112810-; b_lsid=F383ED87_198BB81D290; bsource=search_google; home_feed_column=4; browser_resolution=885-812; CURRENT_FNVAL=2000; sid=mzyg09dq; bili_ticket=eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NTU3NTE4NzgsImlhdCI6MTc1NTQ5MjYxOCwicGx0IjotMX0.SiRr8XBdnDBpyEr_iz92BLDK9KiEBI0wZ12vxOTABEE; bili_ticket_expires=1755751818"
 
 class MediaRecommender:
     def __init__(self):
@@ -14,17 +20,27 @@ class MediaRecommender:
             "Authorization": f"Bearer {INNOSPARK_API_KEY}",
             "Content-Type": "application/json"
         }
-        # 通用的User-Agent，模拟浏览器行为，降低被封禁的风险
         self.common_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+            'Accept': 'application/json, text/plain, */*', # 修改为接受JSON，因为是API请求
             'Connection': 'keep-alive',
-            'Referer': 'https://www.google.com/'  # 模拟从Google跳转
+            'Referer': 'https://search.bilibili.com/', # 模拟从B站搜索页跳转
         }
+        # 将cookies字符串转换为字典
+        self.bilibili_cookies_dict = self._parse_cookies_string(MOCK_BILIBILI_COOKIES)
+
+    def _parse_cookies_string(self, cookies_str: str) -> Dict[str, str]:
+        """将cookies字符串转换为字典"""
+        cookies_dict = {}
+        for item in cookies_str.split('; '):
+            if '=' in item:
+                key, value = item.split('=', 1)
+                cookies_dict[key] = value
+        return cookies_dict
 
     def _clean_ai_response_for_keywords(self, content: str) -> str:
-        """专门用于清理AI生成的关键词响应，去除无关的格式和解释"""
+        # ... (与之前相同)
         # 移除各种可能的思考标签
         content = re.sub(r'<[^>]+>', '', content, flags=re.DOTALL)  # 移除所有XML/HTML标签
 
@@ -43,7 +59,9 @@ class MediaRecommender:
         content = re.sub(r'\s+', ' ', content).strip()
         return content
 
+
     def _simple_keyword_extraction(self, content: str) -> str:
+        # ... (与之前相同)
         """简单的关键词提取作为备选方案，仅用于AI提取失败时"""
         try:
             import jieba  # pip install jieba
@@ -56,7 +74,9 @@ class MediaRecommender:
         keywords = [word for word in words if len(word) > 1 and word not in stop_words][:5]
         return ' '.join(keywords)
 
+
     def _translate_keywords_to_english(self, chinese_keywords: str) -> str:
+        # ... (与之前相同)
         """
         使用Innospark模型将中文关键词翻译成英文，用于Pexels搜索。
         """
@@ -107,6 +127,7 @@ class MediaRecommender:
             return ""
 
     def extract_keywords_from_section(self, section_content: str, section_name: str) -> str:
+        # ... (与之前相同)
         """使用AI从教案部分提取关键词用于媒体搜索"""
         prompt = f"""
         请从以下教案的"{section_name}"部分中提取最适合用于搜索相关图片和视频的中文关键词。
@@ -156,6 +177,7 @@ class MediaRecommender:
             print(f"An unexpected error occurred during AI keyword extraction: {e}")
             return self._simple_keyword_extraction(section_content)
 
+
     def get_images_for_section(self, section_content: str, section_name: str, count: int = 3) -> List[Dict]:
         """根据教案部分内容获取相关图片"""
         keywords = self.extract_keywords_from_section(section_content, section_name)
@@ -167,6 +189,7 @@ class MediaRecommender:
         return self.get_videos(keywords, count)
 
     def get_images(self, query: str, count: int = 3) -> List[Dict]:
+        # ... (与之前相同)
         """从Pexels API 获取相关图片，并优化中文查询（通过翻译）。"""
         if not PEXELS_API_KEY:
             print("PEXELS_API_KEY is not set. Cannot fetch images from Pexels.")
@@ -213,93 +236,100 @@ class MediaRecommender:
 
     def get_videos(self, query: str, count: int = 3) -> List[Dict]:
         """
-        从B站搜索相关视频 (通过网页抓取实现)，主要目标是获取链接。
-        注意：B站网页结构可能会随时变化，导致抓取失败。
+        从B站搜索相关视频 (通过API实现，借鉴1.py思路)。
+        注意：B站API可能需要WBI签名或特定且有效的Cookies。
         """
-        print(f"Searching Bilibili (web scraping) for: '{query}')")
+        print(f"Searching Bilibili API for: '{query}'")
+
+        search_url = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2"
+        params = {
+            'keyword': query,
+            'page': 1,
+            'page_size': 42, # 增大page_size以获取更多结果进行筛选
+            'platform': 'pc',
+            'highlight': 1,
+            'single_column': 0
+        }
+
+        # 为了兼容WBI签名（如果需要），这里可以添加w_rid和wts，但暂时不实现WBI算法
+        # 如果遇到-412错误，表示WBI签名缺失或错误，需要进一步实现签名逻辑
+        # params.update(self._get_wbi_sign_params(params)) # 假设有这个方法
+
         try:
-            search_url = f"https://search.bilibili.com/all?keyword={urllib.parse.quote(query)}&from_source=web_search&order=totalrank&duration=0&tids_1=-1&__refresh__=true&page=1"
+            response = requests.get(
+                search_url,
+                params=params,
+                headers=self.common_headers, # 使用通用header，包含User-Agent等
+                cookies=self.bilibili_cookies_dict, # 使用解析后的cookies字典
+                timeout=15
+            )
 
-            headers = self.common_headers.copy()
-            headers['Referer'] = 'https://www.bilibili.com/'
+            data = response.json()
 
-            response = requests.get(search_url, headers=headers, timeout=30)
-            response.raise_for_status()
+            if data.get('code') == -412:
+                print("Bilibili search API was blocked, might need WBI signature. Refer to https://nemo2011.github.io/bilibili-api/#/get-credential")
+                return []
+            if data.get('code') != 0:
+                print(f"Bilibili API returned an error: {data.get('message', 'Unknown error')}")
+                return []
 
-            soup = BeautifulSoup(response.text, 'html.parser')
+            # 提取视频结果，根据1.py的结构，视频数据在result的第11个元素
+            results_sections = data.get('data', {}).get('result', [])
+            video_data_list = []
+            if len(results_sections) > 11 and 'data' in results_sections[11]:
+                video_data_list = results_sections[11]['data']
+            else:
+                print("Could not find video data in the expected structure (results[11]['data']).")
 
-            # 查找视频卡片，优先匹配新版结构 'bili-video-card'
-            video_items = soup.find_all('div', class_=re.compile(r'bili-video-card'))
-            if not video_items:
-                video_items = soup.find_all('li', class_='video-item')  # 兼容旧版
-            if not video_items:
-                video_items = soup.find_all('li', class_='video matrix')  # 更旧的结构
 
             videos = []
+            for item in video_data_list:
+                if item.get('media_type') == 'video' or item.get('type') == 'video': # 确保是视频类型
+                    title = self._clean_html(item.get('title', '无标题')) # 标题可能包含HTML标签
+                    arcurl = item.get('arcurl', '') # 视频链接
+                    bvid = item.get('bvid', '') # B站视频ID
+                    author = item.get('author', item.get('upic', '未知UP主')) # 提取UP主
+                    duration = item.get('duration', '00:00') # 视频时长
+                    play = item.get('play', 0) # 播放量
+                    video_review = item.get('video_review', 0) # 弹幕数
+                    description = self._clean_html(item.get('description', '')) # 描述
 
-            for item in video_items[:count]:
-                title = 'N/A'
-                url = ''
-                author = 'N/A'
+                    thumbnail = item.get('pic', '')
+                    if thumbnail and not thumbnail.startswith('http'):
+                        thumbnail = 'https:' + thumbnail # 补全缩略图链接
 
-                # --- 提取标题和URL (核心逻辑) ---
-                title_link_tag = item.find('h3', class_=re.compile(r'bili-video-card__info--tit'))
-                if title_link_tag:  # 如果找到了H3标题容器
-                    title_link_tag_a = title_link_tag.find('a')  # 尝试查找H3下的A标签
-                    if title_link_tag_a:
-                        title = title_link_tag_a.get('title', 'N/A').strip()
-                        raw_url = title_link_tag_a.get('href', '')
-                        url = 'https:' + raw_url if raw_url.startswith('//') else raw_url
-                        if url and not url.startswith('http'):
-                            url = urllib.parse.urljoin('https://www.bilibili.com/', url)
-
-                # 如果新版H3下的A标签没有找到，尝试旧版直接的A标签
-                if not url:  # 如果URL还为空，尝试旧版选择器
-                    title_link_tag_old = item.find('a', class_='title')
-                    if title_link_tag_old:
-                        title = title_link_tag_old.get('title', 'N/A').strip()
-                        raw_url = title_link_tag_old.get('href', '')
-                        url = 'https:' + raw_url if raw_url.startswith('//') else raw_url
-                        if url and not url.startswith('http'):
-                            url = urllib.parse.urljoin('https://www.bilibili.com/', url)
-
-                # --- 提取UP主名称 (次要，能取到就取) ---
-                author_tag = item.find('a', class_='up-name') or item.find('span',
-                                                                           class_='bili-video-card__info--author') or item.find(
-                    'span', class_='bili-video-card__info--owner')
-                if author_tag:
-                    author = author_tag.text.strip()
-
-                # *** 核心判断：只要有有效的URL就返回 ***
-                if url and "bilibili.com/video/BV" in url:  # 确保URL是一个B站视频链接
                     video_info = {
-                        "title": self._clean_html(title),
-                        "url": url,
+                        "title": title,
+                        "url": arcurl,
+                        "bvid": bvid,
+                        "thumbnail": thumbnail,
+                        "description": description,
                         "author": author,
-                        "bvid": re.search(r'(BV[a-zA-Z0-9]+)', url).group(1) if re.search(r'(BV[a-zA-Z0-9]+)',
-                                                                                          url) else "N/A",  # 尝试提取BVID
-                        "thumbnail": "",  # 简化处理，不需要提取
-                        "description": "",  # 简化处理，不需要提取
-                        "duration": "N/A",  # 简化处理，不需要提取
-                        "play": 0,  # 简化处理，不需要提取
-                        "video_review": 0  # 简化处理，不需要提取
+                        "duration": duration,
+                        "play": play,
+                        "video_review": video_review,
+                        "link": arcurl # 原始链接同arcurl
                     }
                     videos.append(video_info)
-                    time.sleep(0.1)  # 增加少量延时
+                    if len(videos) >= count: # 达到所需数量
+                        break
 
-            if not videos:
-                print(f"No valid Bilibili video URLs found for query '{query}'.")
+            print(f"Found {len(videos)} Bilibili videos for query '{query}'.")
             return videos
         except requests.exceptions.RequestException as e:
-            print(f"Bilibili web scraping request failed: {e}")
+            print(f"Bilibili API request failed: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            print(f"Bilibili API response JSON decode error: {e}. Response text: {response.text[:500]}")
             return []
         except Exception as e:
-            print(f"An unexpected error occurred during Bilibili web scraping: {e}")
+            print(f"An unexpected error occurred during Bilibili API call: {e}")
             import traceback
             traceback.print_exc()
             return []
 
     def _clean_html(self, text: str) -> str:
+        # ... (与之前相同)
         """清理HTML标签"""
         if not text:
             return ""
@@ -310,6 +340,7 @@ class MediaRecommender:
         return clean_text.strip()
 
     def _format_duration(self, duration) -> str:
+        # ... (与之前相同)
         """格式化视频时长 (在此简化版本中可能不再直接使用，但为完整性保留)。"""
         if not duration:
             return "未知"
